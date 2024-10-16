@@ -835,11 +835,25 @@ __global__ void advance_pos_nerf(
 	payload.t = t;
 }
 
-__global__ void generate_nerf_network_inputs_from_positions(const uint32_t n_elements, BoundingBox aabb, const Vector3f* __restrict__ pos, const Vector3f* __restrict__ normals, PitchedPtr<NerfCoordinate> network_input, const float* extra_dims) {
+__global__ void generate_nerf_network_inputs_from_positions(const uint32_t n_elements, BoundingBox aabb, const Vector3f* __restrict__ pos, const Vector3f* __restrict__ normals, const Vector3f* __restrict__ cam_dirs, const uint32_t n_cameras, PitchedPtr<NerfCoordinate> network_input, const float* extra_dims) {
 	const uint32_t i = threadIdx.x + blockIdx.x * blockDim.x;
 	if (i >= n_elements) return;
 
-	Vector3f dir=(normals[i]).normalized(); // choose outward pointing directions, for want of a better choice
+	// Given a surface normal, choose the nearest GT camera direction to sample from
+	// Note, only a valid assumption when the NeRF training poses are rotating around some central object
+	uint32_t min_idx = 0;
+	float min_dot = 1.0f; // normalized dot product bounded by [-1, 1]
+	for(uint32_t cam_idx = 0; cam_idx < n_cameras; cam_idx++)
+	{
+		float dot = cam_dirs[cam_idx].dot(normals[i].normalized());
+		if (dot < min_dot)
+		{
+			min_idx = cam_idx;
+			min_dot = dot;
+		}
+	}
+
+	Vector3f dir=-(cam_dirs[min_idx]).normalized(); // choose camera 'closest' to outward pointing direction and invert the direction
 	network_input(i)->set_with_optional_extra_dims(warp_position(pos[i], aabb), warp_direction(dir), warp_dt(MIN_CONE_STEPSIZE()), extra_dims, network_input.stride_in_bytes);
 }
 
@@ -4001,6 +4015,20 @@ void Testbed::training_prep_nerf(uint32_t batch_size, cudaStream_t stream) {
 	}
 }
 
+std::vector<Vector3f> cam_dirs_from_transforms(std::vector<TrainingXForm> transforms) {
+	std::vector<Vector3f> cam_dirs(transforms.size());
+	
+	// Normally, we take the unit vector pointing into screen
+	Vector4f unit(0.0f, 0.0f, 1.0f, 0.0f);
+	for(uint32_t cam_idx = 0; cam_idx < transforms.size(); cam_idx++)
+	{
+		auto direction = transforms.at(cam_idx).end * unit;
+		cam_dirs.at(cam_idx) = direction.head<3>().normalized();
+	}
+
+	return cam_dirs;
+}
+
 void Testbed::optimise_mesh_step(uint32_t n_steps) {
 	uint32_t n_verts = (uint32_t)m_mesh.verts.size();
 	if (!n_verts) {
@@ -4018,12 +4046,16 @@ void Testbed::optimise_mesh_step(uint32_t n_steps) {
 
 	const float* extra_dims_gpu = get_inference_extra_dims(m_inference_stream);
 
+	GPUMemory<Eigen::Vector3f> camera_dirs_gpu(m_nerf.training.transforms.size());
+	std::vector<Eigen::Vector3f> cam_dirs = cam_dirs_from_transforms(m_nerf.training.transforms);
+	camera_dirs_gpu.copy_from_host(cam_dirs);
+
 	for (uint32_t i = 0; i < n_steps; ++i) {
 		linear_kernel(generate_nerf_network_inputs_from_positions, 0, m_inference_stream,
 			n_verts,
 			m_aabb,
 			m_mesh.verts.data(),
-			m_mesh.vert_normals.data(),
+			m_mesh.vert_normals.data(), camera_dirs_gpu.data(), m_nerf.training.transforms.size(),
 			PitchedPtr<NerfCoordinate>((NerfCoordinate*)coords.data(), 1, 0, extra_stride),
 			extra_dims_gpu
 		);
@@ -4067,6 +4099,11 @@ void Testbed::compute_mesh_vertex_colors() {
 	if (m_testbed_mode == ETestbedMode::Nerf) {
 		const float* extra_dims_gpu = get_inference_extra_dims(m_inference_stream);
 
+		// Calculate a list of training camera directions
+		GPUMemory<Eigen::Vector3f> camera_dirs_gpu(m_nerf.training.transforms.size());
+		std::vector<Eigen::Vector3f> cam_dirs = cam_dirs_from_transforms(m_nerf.training.transforms);
+		camera_dirs_gpu.copy_from_host(cam_dirs);
+
 		const uint32_t floats_per_coord = sizeof(NerfCoordinate) / sizeof(float) + m_nerf_network->n_extra_dims();
 		const uint32_t extra_stride = m_nerf_network->n_extra_dims() * sizeof(float);
 		GPUMemory<float> coords(n_verts * floats_per_coord);
@@ -4074,7 +4111,7 @@ void Testbed::compute_mesh_vertex_colors() {
 
 		GPUMatrix<float> positions_matrix((float*)coords.data(), floats_per_coord, n_verts);
 		GPUMatrix<float> color_matrix(mlp_out.data(), 7, n_verts);
-		linear_kernel(generate_nerf_network_inputs_from_positions, 0, m_inference_stream, n_verts, m_aabb, m_mesh.verts.data(), m_mesh.vert_normals.data(), PitchedPtr<NerfCoordinate>((NerfCoordinate*)coords.data(), 1, 0, extra_stride), extra_dims_gpu);
+		linear_kernel(generate_nerf_network_inputs_from_positions, 0, m_inference_stream, n_verts, m_aabb, m_mesh.verts.data(), m_mesh.vert_normals.data(), camera_dirs_gpu.data(), m_nerf.training.transforms.size(), PitchedPtr<NerfCoordinate>((NerfCoordinate*)coords.data(), 1, 0, extra_stride), extra_dims_gpu);
 		m_network->inference(m_inference_stream, positions_matrix, color_matrix);
 		linear_kernel(extract_srgb_with_activation, 0, m_inference_stream, n_verts * 3, 3, mlp_out.data(), (float*)m_mesh.vert_colors.data(), m_nerf.rgb_activation, m_nerf.training.linear_colors);
 	}
