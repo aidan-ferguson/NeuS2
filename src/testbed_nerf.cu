@@ -854,6 +854,8 @@ __global__ void generate_nerf_network_inputs_from_positions(const uint32_t n_ele
 	}
 
 	Vector3f dir=-(cam_dirs[min_idx]).normalized(); // choose camera 'closest' to outward pointing direction and invert the direction
+	// Vector3f dir=(normals[i]).normalized();
+	
 	network_input(i)->set_with_optional_extra_dims(warp_position(pos[i], aabb), warp_direction(dir), warp_dt(MIN_CONE_STEPSIZE()), extra_dims, network_input.stride_in_bytes);
 }
 
