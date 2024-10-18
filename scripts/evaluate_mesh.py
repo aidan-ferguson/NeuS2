@@ -7,6 +7,7 @@ from pathlib import Path
 import json
 import cv2
 from tqdm import tqdm
+from image_similarity_measures.quality_metrics import rmse
 
 def main():
     parser = argparse.ArgumentParser(description='Evaluate how accurate a NeuS2 generated mesh is')
@@ -16,7 +17,7 @@ def main():
 
     # TODO: make command line options
     render_debug = False
-    save_render = True 
+    save_render = False 
 
     # TODO: checking if stuff exists
 
@@ -90,7 +91,7 @@ def main():
     ctr.set_constant_z_far(10000.0)
 
     # Loop through each camera pose, taking the image of the current frame and evaluate mesh quality
-    mae_history = []
+    rmse_history = []
     for idx, cam in enumerate(tqdm(gt_cameras)):
         # Our pose is currently in the wrong coordinate system (+Z points away from object), flip
         flip_axes = np.array([
@@ -124,8 +125,8 @@ def main():
 
         # Perform MAE on the render and the GT image, only considering non-masked pixels
         mask = gt_img[:, :, 3] > 0
-        gt_mask = gt_img[mask][:, :3]
-        render_mask = render[mask][:, :3]
+        gt_img[mask][:, :3] = 0
+        render[mask][:, :3] = 0
 
         if save_render:
             full_render_mask = np.array(gt_img)
@@ -141,11 +142,11 @@ def main():
             cv2.imwrite(eval_path / f"{idx}_render_mask.png", full_render_mask)
             cv2.imwrite(eval_path / f"{idx}_diff.png", diff_mask)
             
-        mae = np.mean(np.abs(render_mask - gt_mask))
-        mae_history.append(mae)
+        _rmse = rmse(gt_img[:, :, :3], render[:, :, :3])
+        rmse_history.append(_rmse)
 
-    print("MAE mean: ", np.mean(mae_history))
-    print("MAE std. dev: ", np.std(mae_history))
+    print("RMSE mean: ", np.mean(rmse_history))
+    print("RMSE std. dev: ", np.std(rmse_history))
 
     vis.close()
 
