@@ -120,6 +120,7 @@ def main():
 
     # Loop through each camera pose, taking the image of the current frame and evaluate mesh quality
     rmse_history = []
+    iou_history = []
     for idx, cam in enumerate(tqdm(gt_cameras)):
         # Set up camera parameters, attempting to get per frame parameters if they exist
         camera_parameters = o3d.camera.PinholeCameraParameters()
@@ -145,9 +146,11 @@ def main():
 
         # Render mesh from viewpoint of camera
         render = np.asarray(vis.capture_screen_float_buffer(True))
+        depth = np.asarray(vis.capture_depth_float_buffer(True))
         render = cv2.cvtColor(np.array(render * 255, dtype=np.uint8), cv2.COLOR_RGB2BGR)
         if save_render:
             cv2.imwrite(eval_path / f"{idx}_render_raw.png", render)
+            cv2.imwrite(eval_path / f"{idx}_render_depth.png", depth)
 
         # Load GT image, note we assume the image has already been pre-masked (using the generation tool)
         # Will error if there are not 4 channels detected OR the alpha channel is opaque
@@ -158,9 +161,16 @@ def main():
         assert(gt_img.shape[1] == render.shape[1])
 
         # Perform MAE on the render and the GT image, only considering non-masked pixels
-        mask = gt_img[:, :, 3] > 0
-        gt_mask = gt_img[mask][:, :3]
-        render_mask = render[mask][:, :3]
+        gt_mask = gt_img[:, :, 3] > 0
+        gt_masked = gt_img[gt_mask][:, :3]
+        render_masked = render[gt_mask][:, :3]
+
+        # Use segmentation mask IoU as a metric for geometry accuracy
+        render_mask = depth > 0
+        a = np.nonzero(gt_mask.flatten())
+        b = np.nonzero(render_mask.flatten())
+        iou = np.intersect1d(a, b).shape[0] / np.union1d(a, b).shape[0]
+        iou_history.append(iou)
 
         if save_render:
             full_render_mask = np.array(gt_img)
@@ -176,12 +186,16 @@ def main():
             cv2.imwrite(eval_path / f"{idx}_render_mask.png", full_render_mask)
             cv2.imwrite(eval_path / f"{idx}_diff.png", diff_mask)
             
-        _rmse = get_rmse(gt_mask, render_mask)
+        _rmse = get_rmse(gt_masked, render_masked)
         rmse_history.append(_rmse)
 
     print("Evaluation Summary:")
-    print("- RMSE \u03BC: ", np.mean(rmse_history))
-    print("- RMSE \u03C3: ", np.std(rmse_history))
+    print("Geometry:")
+    print("- Segmentation IoU \u03BC: ", np.mean(iou_history))
+    print("- Segmentation IoU \u03C3: ", np.std(iou_history))
+    print("Texture:")
+    print("- Pixel RMSE \u03BC: ", np.mean(rmse_history))
+    print("- Pixel RMSE \u03C3: ", np.std(rmse_history))
 
     vis.close()
 
