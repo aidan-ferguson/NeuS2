@@ -356,20 +356,20 @@ endif()
 
 
 if (Python_FOUND)
-	add_library(pyngp SHARED src/python_api.cu)
-	set_target_properties(pyngp PROPERTIES CXX_VISIBILITY_PRESET "hidden")
-	set_target_properties(pyngp PROPERTIES CUDA_VISIBILITY_PRESET "hidden")
-	target_link_libraries(pyngp PUBLIC ngp ${PYTHON_LIBRARIES} pybind11::module)
-	target_compile_options(pyngp PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:${CUDA_NVCC_FLAGS}>)
-	target_compile_definitions(pyngp PUBLIC -DNGP_PYTHON ${NGP_DEFINITIONS} ${TCNN_DEFINITIONS})
-	pybind11_extension(pyngp)
+	add_library(pyngp_neus SHARED src/python_api.cu)
+	set_target_properties(pyngp_neus PROPERTIES CXX_VISIBILITY_PRESET "hidden")
+	set_target_properties(pyngp_neus PROPERTIES CUDA_VISIBILITY_PRESET "hidden")
+	target_link_libraries(pyngp_neus PUBLIC ngp ${PYTHON_LIBRARIES} pybind11::module)
+	target_compile_options(pyngp_neus PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:${CUDA_NVCC_FLAGS}>)
+	target_compile_definitions(pyngp_neus PUBLIC -DNGP_PYTHON ${NGP_DEFINITIONS} ${TCNN_DEFINITIONS})
+	pybind11_extension(pyngp_neus)
 
 	if (MSVC)
 		# Copy dlls needed at runtime
 		file(GLOB CUBLAS_DLLS "${CUDA_COMPILER_BIN}/cublas*.dll")
 		if (CUBLAS_DLLS)
-			add_custom_command(TARGET pyngp POST_BUILD
-				COMMAND ${CMAKE_COMMAND} -E copy ${CUBLAS_DLLS} $<TARGET_FILE_DIR:pyngp>
+			add_custom_command(TARGET pyngp_neus POST_BUILD
+				COMMAND ${CMAKE_COMMAND} -E copy ${CUBLAS_DLLS} $<TARGET_FILE_DIR:pyngp_neus>
 				COMMAND_EXPAND_LISTS
 			)
 		endif()
